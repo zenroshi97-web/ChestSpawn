@@ -40,6 +40,9 @@ import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Event;
 import org.bukkit.event.inventory.InventoryType;
+import org.bukkit.plugin.Plugin;
+import java.lang.reflect.Method;
+
 
 
 import java.io.File;
@@ -104,6 +107,7 @@ public class SpawnChestPlugin extends JavaPlugin implements Listener, TabComplet
     private Particle cachedHappyVillager;
     private Particle cachedRain;
     
+    private Object landsIntegration; // <--- PASTE IT HERE
  // ==========================================
     // LANGUAGE/MESSAGE HELPER METHODS
     // ==========================================
@@ -559,7 +563,7 @@ public class SpawnChestPlugin extends JavaPlugin implements Listener, TabComplet
                 
                 Location loc = getValidSpawnLocation(world, finalX, finalZ, minHeight, maxHeight, buryInGround);
                 
-                if (loc != null) {
+                if (loc != null && !isProtected(loc)) {
                     getLogger().info(getMessage("system.chest-location-found",
                         "%x%", String.valueOf(loc.getBlockX()),
                         "%y%", String.valueOf(loc.getBlockY()),
@@ -658,6 +662,73 @@ public class SpawnChestPlugin extends JavaPlugin implements Listener, TabComplet
         if (surface.toString().contains("MAGMA")) return false;
         return true;
     }
+    
+    private void debug(String msg) {
+        Bukkit.getConsoleSender().sendMessage("§8[§6ChestSpawn-Debug§8] §7" + msg);
+    }    
+    
+    private boolean isProtected(Location loc) {
+
+        if (isWorldGuardProtected(loc))
+            return true;
+
+        if (isLandsProtected(loc))
+            return true;
+
+        return false;
+    }
+
+    private boolean isLandsProtected(Location loc) {
+        if (Bukkit.getPluginManager().getPlugin("Lands") == null) return false;
+
+        try {
+            if (landsIntegration == null) {
+                Class<?> clazz = Class.forName("me.angeschossen.lands.api.LandsIntegration");
+                landsIntegration = clazz.getMethod("of", Plugin.class).invoke(null, this);
+            }
+
+            // getArea returns null if it's Wilderness
+            Method getAreaMethod = landsIntegration.getClass().getMethod("getArea", Location.class);
+            Object area = getAreaMethod.invoke(landsIntegration, loc);
+
+            if (area != null) {
+                debug("Blocked: Found Lands Area at " + loc.getBlockX() + " " + loc.getBlockZ());
+                return true;
+            }
+        } catch (Exception e) {
+            debug("Lands Check Error: " + e.getMessage());
+        }
+
+        return false;
+    }
+
+    private boolean isWorldGuardProtected(Location loc) {
+        Plugin wgPlugin = Bukkit.getPluginManager().getPlugin("WorldGuard");
+        if (wgPlugin == null) return false;
+
+        try {
+            // Convert Bukkit location to WorldGuard/WorldEdit location
+            com.sk89q.worldedit.util.Location weLoc = com.sk89q.worldedit.bukkit.BukkitAdapter.adapt(loc);
+            
+            // Get the regions at this specific location
+            com.sk89q.worldguard.protection.regions.RegionContainer container = 
+                com.sk89q.worldguard.WorldGuard.getInstance().getPlatform().getRegionContainer();
+            
+            com.sk89q.worldguard.protection.regions.RegionQuery query = container.createQuery();
+            com.sk89q.worldguard.protection.ApplicableRegionSet set = query.getApplicableRegions(weLoc);
+
+            // If the set is NOT empty, it means there is at least one region here
+            if (set.size() > 0) {
+                debug("Blocked: Found " + set.size() + " WorldGuard region(s) at " 
+                    + loc.getBlockX() + " " + loc.getBlockY() + " " + loc.getBlockZ());
+                return true; 
+            }
+        } catch (Exception e) {
+            debug("WorldGuard check error: " + e.getMessage());
+        }
+        return false;
+    }
+
 
     private void spawnChestAtLocation(Location location, boolean resetTimer) {
         if (location == null || location.getWorld() == null) {
@@ -2759,6 +2830,95 @@ public class SpawnChestPlugin extends JavaPlugin implements Listener, TabComplet
             return true;
         }
         
+        // /spawnchest command
+        if (cmd.getName().equalsIgnoreCase("spawnchest")) {
+
+            if (!sender.hasPermission("spawnchest.admin")) {
+                sendMessage(sender, "commands.no-permission");
+                return true;
+            }
+
+            Location loc;
+
+            // spawn at player location
+            if (args.length == 0) {
+
+                if (!(sender instanceof Player)) {
+                    sender.sendMessage("§cConsole must specify coordinates.");
+                    return true;
+                }
+
+                Player player = (Player) sender;
+                loc = player.getLocation();
+
+            } 
+            // spawn at coordinates
+            else if (args.length >= 3) {
+
+                try {
+                    double x = Double.parseDouble(args[0]);
+                    double y = Double.parseDouble(args[1]);
+                    double z = Double.parseDouble(args[2]);
+
+                    World world;
+
+                    if (args.length >= 4) {
+                        world = Bukkit.getWorld(args[3]);
+                    } else {
+
+                        if (!(sender instanceof Player)) {
+                            sender.sendMessage("§cConsole must specify world.");
+                            return true;
+                        }
+
+                        world = ((Player) sender).getWorld();
+                    }
+
+                    if (world == null) {
+                        sender.sendMessage("§cWorld not found.");
+                        return true;
+                    }
+
+                    loc = new Location(world, x, y, z);
+
+                } catch (NumberFormatException e) {
+                    sender.sendMessage("§cInvalid coordinates.");
+                    return true;
+                }
+
+            } else {
+                sender.sendMessage("§cUsage: /spawnchest [x] [y] [z] [world]");
+                return true;
+            }
+
+            // 🚨 Protection check
+            if (isProtected(loc)) {
+
+                sender.sendMessage("§cCannot spawn chest here — location is protected.");
+
+                Bukkit.getConsoleSender().sendMessage(
+                    "[ChestSpawn] Blocked manual spawn at "
+                    + loc.getWorld().getName() + " "
+                    + loc.getBlockX() + " "
+                    + loc.getBlockY() + " "
+                    + loc.getBlockZ()
+                );
+
+                return true;
+            }
+
+            // Spawn chest
+            spawnChestAtLocation(loc, true);
+
+            sender.sendMessage("§aChest spawned at "
+                    + loc.getBlockX() + ", "
+                    + loc.getBlockY() + ", "
+                    + loc.getBlockZ());
+
+            return true;
+        }        
+        
+        
         // /mystats
         if (cmd.getName().equalsIgnoreCase("mystats")) {
             if (!(sender instanceof Player)) {
@@ -3545,7 +3705,10 @@ public class SpawnChestPlugin extends JavaPlugin implements Listener, TabComplet
                     double z = loc.getZ() + Math.sin(angle) * 1.5;
                     double y = loc.getY() + Math.sin(tick * 0.1) * 0.3;
                     
-                    world.spawnParticle(particle, x, y, z, 1, 0, 0, 0, 0);
+                    try {
+                        world.spawnParticle(particle, x, y, z, 1, 0, 0, 0, 0.01);
+                    } catch (Exception ignored) {
+                    }
                 }
                 
                 // Beacon beam effect
