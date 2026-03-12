@@ -2,6 +2,7 @@ name: SpawnChestPlugin
 version: 4.2
 main: com.myplugin.SpawnChestPlugin
 api-version: '1.18'
+softdepend: [WorldGuard]
 description: Treasure chest events with legendary items, guardians, achievements. Supports 1.18-1.21+
 author: Bohdan Stepantsov
 
@@ -10,6 +11,10 @@ commands:
     description: Spawn a chest immediately
     permission: spawnchest.admin
     aliases: [spawnchestnow]
+  spawnchest:
+    description: Spawn a chest at your location or coordinates
+    usage: /spawnchest [x] [y] [z] [world]
+    permission: spawnchest.admin
   nextchest:
     description: Show time until next chest
     permission: spawnchest.use
